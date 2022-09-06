@@ -10,7 +10,6 @@ const app = express();
 app.use(cors());
 app.use(json());
 dotenv.config();
-
 const PORT = process.env.PORTA;
 const NOME = process.env.NOMEE;
 let db ;
