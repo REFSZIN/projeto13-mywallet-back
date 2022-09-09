@@ -5,6 +5,8 @@ import chalk from "chalk";
 import dotenv from "dotenv";
 import dayjs from "dayjs";
 import joi from "joi";
+import { v4 as uuid } from "uuid";
+import bcrypt from "bcrypt";
 
 const app = express();
 app.use(cors());
@@ -19,7 +21,7 @@ const mongoClient = new MongoClient(process.env.MONGO_URI);
 const promise = mongoClient.connect();
 
 promise.then(() => 
-  db = mongoClient.db('process.env.DB_NAME')
+  db = mongoClient.db(process.env.DB_NAME)
 );
 
 promise.catch(err =>
@@ -27,16 +29,19 @@ promise.catch(err =>
 );
 
 app.post('/auth/sing-up', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
+  const { name, email, password, password_confirmation } = req.body;
 
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
-  }
+  const newUser = {name,email,password,password_confirmation};
+
+  const Schema = joi.object({
+    name: joi.string().min(3).trim().required(),
+    email: joi.string().email().trim().required(),
+    password: joi.string().min(3).max(25).trim().required(),
+    password_confirmation: joi.any().valid(joi.ref('password')).trim().required().options({ language: { any: { allowOnly: 'Senhas não Conrrespondente' } } })
+  });
+
+  const valid = Schema.validate(newUser, {abortEarly: false});
+
   if(valid.errorMessage){
     const erros = validation.error.details.map((err) => err.message);
     res.status(422).send(
@@ -44,27 +49,20 @@ app.post('/auth/sing-up', async (req, res) => {
       ); 
     return
   };
+  
+  const passwordHash = bcrypt.hashSync(newUser.password, 10);
+  const passwordConfirmHash = bcrypt.hashSync(newUser.password_confirmation, 10);
 
   try {
-
-    const newUser = await db.collection('participantes').findOne({name: name})
-
-    if(newUser) {
+    const verificaUser = await db.collection('users').findOne({email: email})
+    if(verificaUser) {
       return res.status(409).send(
-        `Apelido existente : ${newUser}`)
+        `Email existente : ${email}`)
     };
-
-    const lastStatus = Date.now();
-
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
+    await db.collection("users").insertOne(
+      {...newUser, password: passwordHash ,password_confirmation: passwordConfirmHash}
     );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
+    res.status(201).send(`Criado com sucesso`);
     return
   }
   catch (err) {
@@ -75,16 +73,16 @@ app.post('/auth/sing-up', async (req, res) => {
   }
 );
 app.post('/auth/sing-in', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
+  const { email, password } = req.body;
+  const userLogin = { email, password };
 
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
-  }
+  const Schema = joi.object({
+    email: joi.string().email().trim().required(),
+    password: joi.string().min(3).max(25).trim().required(),
+  });
+
+  const valid = Schema.validate(userLogin, {abortEarly: false});
+
   if(valid.errorMessage){
     const erros = validation.error.details.map((err) => err.message);
     res.status(422).send(
@@ -94,25 +92,22 @@ app.post('/auth/sing-in', async (req, res) => {
   };
 
   try {
+    const user = await db.collection('users').findOne({email});
+    const passwordIsValid = bcrypt.compareSync(password, user.password);
 
-    const newUser = await db.collection('participantes').findOne({name: name})
-
-    if(newUser) {
-      return res.status(409).send(
-        `Apelido existente : ${newUser}`)
-    };
-
-    const lastStatus = Date.now();
-
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
-    );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
+    if(user && passwordIsValid) {
+        const token = uuid();
+        await db.collection("sessions").insertOne({
+          userId: user._id,
+          token
+        })
+        res.send(token);
+    } else {
+      res.status(422).send(
+        `Usuário não encontrado (email ou senha incorretos)`
+        ); 
+    }
+    res.status(201).send(`Logado com sucesso: ${user.name}`);
     return
   }
   catch (err) {
@@ -123,16 +118,17 @@ app.post('/auth/sing-in', async (req, res) => {
   }
 );
 app.post('/exit', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
+  const { valor , description } = req.body;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const postExit = {valor, description};
 
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
-  }
+  const Schema = joi.object({ 
+    valor : joi.number().min(1).trim().required(),
+    description: joi.string().min(3).trim().required()
+  });
+
+  const valid = Schema.validate(postExit, {abortEarly: false});
+
   if(valid.errorMessage){
     const erros = validation.error.details.map((err) => err.message);
     res.status(422).send(
@@ -140,27 +136,28 @@ app.post('/exit', async (req, res) => {
       ); 
     return
   };
-
+  
   try {
+    const session = await db.collection('sessions').findOne({
+      token,
+    })
+    if (!session) {
+      return res.send(401);
+    }
 
-    const newUser = await db.collection('participantes').findOne({name: name})
+    const user = await db.collection('users').findOne({
+      _id: session.userId,
+    })
 
-    if(newUser) {
+    if(!user) {
       return res.status(409).send(
-        `Apelido existente : ${newUser}`)
+        `ID de User não existente`)
     };
+    const day = dayjs(Date.now()).format("D:M");
 
-    const lastStatus = Date.now();
+    await db.collection('wallets').insertOne({...postExit , date: day})
 
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
-    );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
+    res.status(201).send(`Saida criado com sucesso: ${description}} com o valor: ${valor}`);
     return
   }
   catch (err) {
@@ -171,16 +168,17 @@ app.post('/exit', async (req, res) => {
   }
 );
 app.post('/entry', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
+  const { valor , description } = req.body;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const postEntry = {valor, description};
 
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
-  }
+  const Schema = joi.object({ 
+    valor : joi.number().min(1).required(),
+    description: joi.string().min(3).required()
+  });
+
+  const valid = Schema.validate(postEntry, {abortEarly: false});
+
   if(valid.errorMessage){
     const erros = validation.error.details.map((err) => err.message);
     res.status(422).send(
@@ -188,27 +186,28 @@ app.post('/entry', async (req, res) => {
       ); 
     return
   };
-
+  
   try {
+    const session = await db.collection('sessions').findOne({
+      token,
+    })
+    if (!session) {
+      return res.send(401);
+    }
 
-    const newUser = await db.collection('participantes').findOne({name: name})
+    const user = await db.collection('users').findOne({
+      _id: session.userId,
+    })
 
-    if(newUser) {
+    if(!user) {
       return res.status(409).send(
-        `Apelido existente : ${newUser}`)
+        `ID de User não existente`)
     };
+    const day = dayjs(Date.now()).format("D:M");
 
-    const lastStatus = Date.now();
+    await db.collection('wallets').insertOne({...postEntry , date: day})
 
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
-    );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
+    res.status(201).send(`Entrada criada com sucesso: ${description}} com o valor: ${valor}`);
     return
   }
   catch (err) {
@@ -219,148 +218,120 @@ app.post('/entry', async (req, res) => {
   }
 );
 app.get('/wallet', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
-
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
-  }
-  if(valid.errorMessage){
-    const erros = validation.error.details.map((err) => err.message);
-    res.status(422).send(
-      `Todos os campos são obrigatórios! : ${erros}`
-      ); 
-    return
-  };
-
+  const token = req.headers.authorization?.replace('Bearer ', '');
   try {
+    const session = await db.collection('sessions').findOne({
+      token,
+    })
+    if (!session) {
+      return res.send(401);
+    }
 
-    const newUser = await db.collection('participantes').findOne({name: name})
+    const user = await db.collection('users').findOne({
+      _id: session.userId,
+    })
 
-    if(newUser) {
+    if(!user) {
       return res.status(409).send(
-        `Apelido existente : ${newUser}`)
+        `ID de User não existente`)
     };
 
-    const lastStatus = Date.now();
-
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
+    await db.collection("wallets").find().toArray().then(wallet => {
+    res.status(200).send(
+      wallet
+    ); 
+      return
+    }
     );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
-    return
-  }
-  catch (err) {
+    } catch (err) {
     console.error(err);
     res.sendStatus(500);
-    return
-  };
   }
+}
 );
-app.put('/edit/wallet/:id', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
+app.put('/edit/wallet/:ID', async (req, res) => {
+  const { ID } = req.params;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const { valor , description } = req.body;
 
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
+  const Scheme = joi.object(
+    {
+      valor: joi.number().trim().required(),
+      description: joi.string().trim().required(),
+    }
+  )
+  const { error } = Scheme.validate(req.body);
+
+  if(error){
+    res.status(422).send(error.details.map(detail => detail.message));
   }
-  if(valid.errorMessage){
-    const erros = validation.error.details.map((err) => err.message);
-    res.status(422).send(
-      `Todos os campos são obrigatórios! : ${erros}`
-      ); 
-    return
-  };
-
   try {
+    const session = await db.collection('sessions').findOne({
+      token,
+  })
+    if (!session) {
+      return res.send(401);
+    }
 
-    const newUser = await db.collection('participantes').findOne({name: name})
+    const user = await db.collection('users').findOne({
+      _id: session.userId,
+    })
 
-    if(newUser) {
+    if(!user) {
       return res.status(409).send(
-        `Apelido existente : ${newUser}`)
+        `ID de User não existente`)
     };
+    const message = await db.collection('wallets').findOne({_id: ObjectId(`${ID}`)});
+    
+    if(!message){
+      return res.sendStatus(404);
+    }
+    
+    await db.collection('mensagems').updateOne({_id: new ObjectId(ID_DA_MENSAGEM)},
+    {$set: 
+      {
+        valor,
+        description
+      }
+    });
+    res.status(201).send("Wallet atualizada com sucesso!");
 
-    const lastStatus = Date.now();
-
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
-    );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
-    return
-  }
-  catch (err) {
-    console.error(err);
-    res.sendStatus(500);
-    return
-  };
-  }
+    } catch(e) {
+      res.status(500).send({errorMessage: `Não foi possível Editar! Causa: ${e}`});
+    }
+}
 );
-app.delete('/del/wallet/:id', async (req, res) => {
-  const { name } = req.body;
-  const Schema = joi.object({ name: joi.string().min(3).required()});
-  const valid = Schema.validate(name, {abortEarly: false});
-
-  if(name === null){
-    res.status(422).send(
-      `Name user is Null`
-      ); 
-    return
-  }
-  if(valid.errorMessage){
-    const erros = validation.error.details.map((err) => err.message);
-    res.status(422).send(
-      `Todos os campos são obrigatórios! : ${erros}`
-      ); 
-    return
-  };
-
+app.delete('/del/wallet/:ID', async (req, res) => {
+  const { ID } = req.params;
+  const token = req.headers.authorization?.replace('Bearer ', '');
   try {
+    const session = await db.collection('sessions').findOne({
+      token,
+  })
+    if (!session) {
+      return res.send(401);
+    }
 
-    const newUser = await db.collection('participantes').findOne({name: name})
+    const user = await db.collection('users').findOne({
+      _id: session.userId,
+    })
 
-    if(newUser) {
+    if(!user) {
       return res.status(409).send(
-        `Apelido existente : ${newUser}`)
+        `ID de User não existente`)
     };
+    const message = await db.collection('wallets').findOne({_id: ObjectId(`${ID}`)});
+    
+    if(!message){
+      return res.sendStatus(404);
+    }
 
-    const lastStatus = Date.now();
-
-    await db.collection("participantes").insertOne(
-      {name, lastStatus}
-    );
-
-    await db.collection("mensagems").insertOne(
-      {from: name, to: 'Todos', text: `entra na sala...`, type: 'status', time: dayjs(Date.now()).format("HH:mm:ss")}
-    );
-
-    res.status(201).send(`Criado com sucesso: ${name} as ${lastStatus}`);
-    return
-  }
-  catch (err) {
-    console.error(err);
-    res.sendStatus(500);
-    return
-  };
-  }
+    await db.collection('mensagems').deleteOne({_id: ObjectId(`${ID_DA_MENSAGEM}`)});
+    res.sendStatus(200);
+    } catch(e) {
+      res.status(500).send({errorMessage: `Não foi possível deletar! Causa: ${e}`});
+    }
+}
 );
 
 app.listen(PORT, () => { console.log(chalk.green.bold(`Rodando ${NOME} Lisu na Porta: ${PORT}`))});
