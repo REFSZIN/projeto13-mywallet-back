@@ -76,7 +76,9 @@ const singIn = async (req, res) => {
           userId: user._id,
           token
         })
-        res.status(201).send(token);
+        const response = {token, name: user.name , email: user.email, password};
+
+        res.status(201).send(response);
         return
     } else {
       res.status(422).send(

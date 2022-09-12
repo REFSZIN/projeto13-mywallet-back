@@ -43,7 +43,7 @@ const exit =  async (req, res) => {
     };
     const day = dayjs(Date.now()).format("D/M");
 
-    await db.collection('wallets').insertOne({...postExit , date: day, author: session.userId, type: "exit"})
+    await db.collection('wallets').insertOne({...postExit , date: day, author: session.userId,  false: false})
 
     res.status(201).send(`Saida criado com sucesso: ${description} com o valor: ${valor}`);
     return
@@ -60,8 +60,8 @@ const entry = async (req, res) => {
   const postEntry = {valor, description};
 
   const Schema = joi.object({ 
-    valor : joi.number().min(1).required(),
-    description: joi.string().min(3).required()
+    valor : joi.number().required(),
+    description: joi.string().required()
   });
 
   const valid = Schema.validate({valor, description}, {abortEarly: false});
@@ -79,7 +79,7 @@ const entry = async (req, res) => {
       token,
     })
     if (!session) {
-      return res.send(401);
+      return res.sendStatus(401);
     }
 
     const user = await db.collection('users').findOne({
@@ -92,7 +92,7 @@ const entry = async (req, res) => {
     };
     const day = dayjs(Date.now()).format("D/M");
 
-    await db.collection('wallets').insertOne({...postEntry , date: day, author: session.userId, type: "entry"})
+    await db.collection('wallets').insertOne({...postEntry , date: day, author: session.userId, true :true})
 
     res.status(201).send(`Entrada criada com sucesso: ${description} com o valor: ${valor}`);
     return
@@ -123,12 +123,9 @@ const wallets = async (req, res) => {
     };
 
     await db.collection("wallets").find({ author: session.userId}).toArray().then(wallet => {
-    res.status(200).send(
-      wallet
-    ); 
-      return
-    }
-    );
+    res.status(200).send(wallet);
+    });
+    return;
     } catch (err) {
     console.error(err);
     res.sendStatus(500);
@@ -145,7 +142,7 @@ const editWallet = async (req, res) => {
       description: joi.string().required(),
     }
   )
-  const { error } = Scheme.validate(req.body);
+  const { error } = Scheme.validate({ valor , description });
 
   if(error){
     res.status(422).send(error.details.map(detail => detail.message));
@@ -155,7 +152,7 @@ const editWallet = async (req, res) => {
       token,
   })
     if (!session) {
-      return res.send(401);
+      return res.sendStatus(401);
     }
 
     const user = await db.collection('users').findOne({
@@ -192,10 +189,10 @@ const deleteWallet = async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   try {
     const session = await db.collection('sessions').findOne({
-      token,
+      token
   })
     if (!session) {
-      return res.send(401);
+      return res.sendStatus(401);
     }
 
     const user = await db.collection('users').findOne({
