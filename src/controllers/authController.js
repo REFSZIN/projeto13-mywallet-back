@@ -70,7 +70,7 @@ const singIn = async (req, res) => {
     const user = await db.collection('users').findOne({email});
     if(user === undefined || null){
       res.status(422).send(
-        `Usuário não encontrado (email ou senha incorretos)`
+        `Usuário undefined || null`
         ); 
     }
     const passwordIsValid = bcrypt.compareSync(password, user.password);
